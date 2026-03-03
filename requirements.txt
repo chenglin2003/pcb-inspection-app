@@ -6,4 +6,4 @@ openai
 anthropic
 pydrive2
 numpy
-opencv-python
+opencv-python-headless

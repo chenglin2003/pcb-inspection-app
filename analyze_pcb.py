@@ -7,7 +7,6 @@ import cv2
 import numpy as np
 from pydrive2.auth import GoogleAuth
 from pydrive2.drive import GoogleDrive
-from oauth2client.service_account import ServiceAccountCredentials
 from dotenv import load_dotenv
 from ai_client import AIClient
 
@@ -28,28 +27,12 @@ def preprocess_image(image_path, target_size=(640, 640)):
 
 # --- Google Drive Logic ---
 _drive_instance = None
-
-def _init_gdrive():
-    service_account_json = os.getenv("GDRIVE_SERVICE_ACCOUNT_JSON")
-    gauth = GoogleAuth()
-
-    # Cloud-friendly mode: use service account JSON provided through env var.
-    if service_account_json:
-        credentials_dict = json.loads(service_account_json)
-        gauth.credentials = ServiceAccountCredentials.from_json_keyfile_dict(
-            credentials_dict,
-            scopes=["https://www.googleapis.com/auth/drive"],
-        )
-        return GoogleDrive(gauth)
-
-    # Local fallback mode: interactive OAuth flow.
-    gauth.LocalWebserverAuth()
-    return GoogleDrive(gauth)
-
 def upload_to_gdrive(file_path: str) -> str:
     global _drive_instance
     if _drive_instance is None:
-        _drive_instance = _init_gdrive()
+        gauth = GoogleAuth()
+        gauth.LocalWebserverAuth() 
+        _drive_instance = GoogleDrive(gauth)
     
     file = _drive_instance.CreateFile({'title': os.path.basename(file_path)})
     file.SetContentFile(file_path)
@@ -79,31 +62,11 @@ def run_roboflow_inference_url(image_url: str, confidence: int, overlap: int):
 def get_vision_pro_explanation(image_url, detections):
     client = get_ai_client()
     prompt = (
-    "You are Vision Pro 4, an expert PCB quality inspector specializing in component-level defect analysis.\n\n"
-    "You will analyze the provided PCB image against a list of automatically flagged candidates. "
-    "Your role is the final expert verification layer before disposition.\n\n"
-    "## Detected Candidates\n"
-    f"{json.dumps(detections, indent=2)}\n\n"
-    "## Defect Classification Guide\n"
-    "Classify each candidate into ONLY one of these 3 defect types, or reject as false positive:\n\n"
-    "| Defect Type        | Description                                              | Key Visual Cue                          |\n"
-    "|--------------------|----------------------------------------------------------|-----------------------------------------|\n"
-    "| Component Removal  | Component missing from its footprint entirely            | Empty pads, solder residue, bare PCB    |\n"
-    "| Positional Swap    | Component placed at wrong location (swapped with another)| Marking mismatch for that footprint     |\n"
-    "| Class Substitution | Wrong component type/value placed at correct location    | Incorrect part marking, color, package  |\n\n"
-    "## For Each Candidate, Provide:\n"
-    "1. **Defect Type** — from the 3 types above, or 'False Positive'\n"
-    "2. **Confidence** — High / Medium / Low (flag if image quality limits assessment)\n"
-    "3. **Severity** — Critical / Major / Minor\n"
-    "4. **Visual Evidence** — specific observation from the image supporting your call\n"
-    "5. **Risk** — functional consequence if unaddressed\n"
-    "6. **Action** — Pass / Rework / Scrap / Manual Review\n\n"
-    "## Board Summary\n"
-    "After all candidates:\n"
-    "- Overall verdict: PASS / FAIL / MANUAL REVIEW REQUIRED\n"
-    "- Most critical defect found (if any)\n"
-    "- Suspected root cause pattern (e.g., pick-and-place error, BOM mismatch, handling damage)\n"
-)
+        "You are Vision Pro 4, an expert PCB quality inspector. "
+        "Analyze this PCB image based on these detected candidates:\n"
+        f"{json.dumps(detections)}\n\n"
+        "Identify if they are actual defects (bridging, missing components, etc.) and explain the risk."
+    )
     return client.analyze_images(prompt=prompt, image_urls=[image_url])
 
 

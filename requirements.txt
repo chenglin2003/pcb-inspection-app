@@ -3,6 +3,7 @@ requests
 pillow
 python-dotenv
 openai
+anthropic
 pydrive2
 numpy
 opencv-python

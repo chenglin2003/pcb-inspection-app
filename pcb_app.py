@@ -2,7 +2,7 @@ import streamlit as st
 import analyze_pcb
 
 st.set_page_config(page_title="PCB Defect Inspector", layout="wide")
-st.title("🔍 PCB Inspection: Roboflow + Vision Pro 4")
+st.title("🔍 PCB Inspection: Roboflow + AI Vision Models")
 
 # --- Sidebar Controls ---
 st.sidebar.header("Segmentation Settings")
@@ -29,17 +29,24 @@ def cache_uploaded_image(uploaded_file, state_prefix: str, temp_filename: str):
     st.session_state[f"{state_prefix}_url"] = public_url
     if state_prefix == "test":
         st.session_state.pop("rf_results", None)
+        st.session_state.pop("rf_results_for", None)
 
 
 uploaded = st.file_uploader("Upload PCB Image", type=["jpg", "jpeg", "png"], key="test_pcb_uploader")
 
 if uploaded:
     cache_uploaded_image(uploaded, "test", "temp_pcb.png")
+    if st.session_state.get("rf_results_for") != st.session_state.get("test_signature"):
+        with st.spinner("Auto-detecting components on uploaded PCB image..."):
+            st.session_state.rf_results = analyze_pcb.run_roboflow_inference_url(
+                st.session_state.test_url, conf_level, overlap_level
+            )
+        st.session_state.rf_results_for = st.session_state.get("test_signature")
 
     # Action Buttons
     col_btn1, col_btn2 = st.columns(2)
     run_detection = col_btn1.button("1. Update Detections / Preview")
-    run_ai = col_btn2.button("2. Send to Vision Pro 4 (AI Compare)")
+    run_ai = col_btn2.button("2. Send to GPT-4 Vision (AI Compare)")
 
     if run_ai:
         st.session_state.ask_for_golden = True
@@ -54,10 +61,21 @@ if uploaded:
         if golden_uploaded:
             cache_uploaded_image(golden_uploaded, "golden", "temp_golden.png")
 
-    if "test_path" in st.session_state and "golden_path" in st.session_state:
+    if "test_path" in st.session_state:
         st.subheader("Uploaded Images")
-        left_col, right_col = st.columns(2)
-        with left_col:
+        if "golden_path" in st.session_state:
+            left_col, right_col = st.columns(2)
+            with left_col:
+                if "rf_results" in st.session_state:
+                    preview_test_path = analyze_pcb.draw_annotations(
+                        st.session_state.test_path, st.session_state.rf_results["predictions"]
+                    )
+                    st.image(preview_test_path, caption="Test PCB (Labelled)", use_container_width=True)
+                else:
+                    st.image(st.session_state["test_path"], caption="Test PCB", use_container_width=True)
+            with right_col:
+                st.image(st.session_state["golden_path"], caption="Golden Reference PCB", use_container_width=True)
+        else:
             if "rf_results" in st.session_state:
                 preview_test_path = analyze_pcb.draw_annotations(
                     st.session_state.test_path, st.session_state.rf_results["predictions"]
@@ -65,8 +83,6 @@ if uploaded:
                 st.image(preview_test_path, caption="Test PCB (Labelled)", use_container_width=True)
             else:
                 st.image(st.session_state["test_path"], caption="Test PCB", use_container_width=True)
-        with right_col:
-            st.image(st.session_state["golden_path"], caption="Golden Reference PCB", use_container_width=True)
 
     # Container for Visuals
     if run_detection or 'rf_results' in st.session_state:
@@ -75,6 +91,7 @@ if uploaded:
                 st.session_state.rf_results = analyze_pcb.run_roboflow_inference_url(
                     st.session_state.test_url, conf_level, overlap_level
                 )
+            st.session_state.rf_results_for = st.session_state.get("test_signature")
         
         rf_results = st.session_state.rf_results
         
@@ -90,14 +107,9 @@ if uploaded:
             st.error("Golden reference image is required. Upload it above, then press Send to Vision Pro 4 again.")
         else:
             with st.spinner("Comparing test PCB vs golden reference and boxing differences..."):
-                diff_image_path, diff_boxes = analyze_pcb.compare_images_and_draw_differences(
+                _, diff_boxes = analyze_pcb.compare_images_and_draw_differences(
                     st.session_state.test_path, st.session_state.golden_path
                 )
-            st.subheader("🔴 Red-Box Difference Map")
-            st.image(diff_image_path, use_container_width=True)
-            st.subheader("JSON Labels")
-            st.write(f"Differences boxed: {len(diff_boxes)}")
-            st.json(diff_boxes)
 
             with st.spinner("Vision Pro 4 Performing Comparison Analysis..."):
                 explanation = analyze_pcb.get_vision_pro_comparison_explanation(

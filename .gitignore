@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Virtual environments
+venv/
+.venv/
+
+# Local environment and secrets
+.env
+client_secrets.json
+
+# Local/generated app artifacts
+temp_*.png
+annotated_result.png
+vision_compare_result.png

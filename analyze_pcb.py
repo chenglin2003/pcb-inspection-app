@@ -5,16 +5,16 @@ import requests
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import cv2
 import numpy as np
-from openai import OpenAI
 from pydrive2.auth import GoogleAuth
 from pydrive2.drive import GoogleDrive
 from dotenv import load_dotenv
+from ai_client import AIClient
 
 load_dotenv()
 
 # --- Clients ---
-def get_openai_client():
-    return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+def get_ai_client():
+    return AIClient()
 
 def preprocess_image(image_path, target_size=(640, 640)):
     img = Image.open(image_path).convert("RGB")
@@ -60,21 +60,14 @@ def run_roboflow_inference_url(image_url: str, confidence: int, overlap: int):
 
 # --- Vision Pro 4 (Semantic Analysis) ---
 def get_vision_pro_explanation(image_url, detections):
-    client = get_openai_client()
+    client = get_ai_client()
     prompt = (
         "You are Vision Pro 4, an expert PCB quality inspector. "
         "Analyze this PCB image based on these detected candidates:\n"
         f"{json.dumps(detections)}\n\n"
         "Identify if they are actual defects (bridging, missing components, etc.) and explain the risk."
     )
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": image_url}}
-        ]}]
-    )
-    return response.choices[0].message.content
+    return client.analyze_images(prompt=prompt, image_urls=[image_url])
 
 
 def compare_images_and_draw_differences(
@@ -104,7 +97,8 @@ def compare_images_and_draw_differences(
 
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    boxed = test_img.copy()
+    # Draw difference boxes on the golden reference image for clearer operator review.
+    boxed = golden_img.copy()
     diff_boxes = []
 
     for contour in contours:
@@ -125,36 +119,47 @@ def get_vision_pro_comparison_explanation(
     diff_boxes,
     detections=None,
 ):
-    client = get_openai_client()
+    client = get_ai_client()
     detections = detections or []
     prompt = (
         "You are Vision Pro 4, an expert PCB quality inspector.\n"
         "Compare Image A (test PCB) against Image B (golden reference PCB).\n"
         "Focus on manufacturing defects and meaningful differences only.\n"
         "Ignore tiny alignment, lighting, or compression changes.\n\n"
+        "Response behavior rules:\n"
+        "- Do not include capability disclaimers or refusal lines.\n"
+        "- Do not say you are unable to compare images.\n"
+        "- If visual certainty is limited, still return the best defect analysis directly from the provided candidates and images.\n"
+        "- Start immediately with the requested output sections.\n\n"
+        "Coordinate and boxing rules:\n"
+        "- Always include defect coordinates in pixels for each detected defect as x,y.\n"
+        "- Use the precomputed red-box candidate differences as the primary coordinate source.\n"
+        "- Treat those coordinates as red bounding boxes on the golden reference image (Image B).\n"
+        "- If no defect is found, explicitly return: Defect coordinates: none.\n\n"
         f"Precomputed red-box candidate differences (x,y,width,height,area): {json.dumps(diff_boxes)}\n"
         f"Roboflow detections on test image: {json.dumps(detections)}\n\n"
         "Return:\n"
         "1) Overall result (PASS/FAIL)\n"
-        "2) Top defect differences with short risk explanation\n"
+        "2) Top defect differences with short risk explanation and explicit coordinates in the form (x: <int>, y: <int>)\n"
         "3) Suggested operator action"
     )
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "text", "text": "Image A: Test PCB"},
-                    {"type": "image_url", "image_url": {"url": test_image_url}},
-                    {"type": "text", "text": "Image B: Golden Reference PCB"},
-                    {"type": "image_url", "image_url": {"url": golden_image_url}},
-                ],
-            }
-        ],
+    image_prompt = f"{prompt}\n\nImage A: Test PCB\nImage B: Golden Reference PCB"
+    response_text = client.analyze_images(
+        prompt=image_prompt,
+        image_urls=[test_image_url, golden_image_url],
     )
-    return response.choices[0].message.content
+    # Remove common capability-disclaimer boilerplate if a model still emits it.
+    filtered_lines = []
+    for line in response_text.splitlines():
+        normalized = line.strip().lower()
+        if (
+            "unable to directly compare the images" in normalized
+            or ("unable to compare" in normalized and "image" in normalized)
+            or ("can analyze the given data" in normalized)
+        ):
+            continue
+        filtered_lines.append(line)
+    return "\n".join(filtered_lines).strip()
 
 # --- Drawing Utility (Updated with labels) ---
 def draw_annotations(image_path, predictions):
